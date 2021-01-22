@@ -8,6 +8,7 @@ import (
 
 	"github.com/shomali11/proper"
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/socketmode"
 )
 
 const (
