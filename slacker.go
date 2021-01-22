@@ -35,10 +35,12 @@ var (
 func NewClient(token string, options ...ClientOption) *Slacker {
 	defaults := newClientDefaults(options...)
 
-	client := slack.New(token, slack.OptionDebug(defaults.Debug))
+	client := slack.New(token, slack.OptionDebug(defaults.Debug), slack.OptionAppLevelToken(defaults.AppToken))
+	rtm := socketmode.New(client, socketmode.OptionDebug(defaults.Debug))
+
 	slacker := &Slacker{
 		client:            client,
-		rtm:               client.NewRTM(),
+		rtm:               rtm,
 		commandChannel:    make(chan *CommandEvent, 100),
 		unAuthorizedError: unAuthorizedError,
 	}
@@ -48,7 +50,7 @@ func NewClient(token string, options ...ClientOption) *Slacker {
 // Slacker contains the Slack API, botCommands, and handlers
 type Slacker struct {
 	client                *slack.Client
-	rtm                   *slack.RTM
+	rtm                   *socketmode.Client
 	botCommands           []BotCommand
 	botContextConstructor func(ctx context.Context, event *slack.MessageEvent, client *slack.Client, rtm *slack.RTM) BotContext
 	requestConstructor    func(botCtx BotContext, properties *proper.Properties) Request
@@ -129,52 +131,108 @@ func (s *Slacker) CommandEvents() <-chan *CommandEvent {
 
 // Listen receives events from Slack and each is handled as needed
 func (s *Slacker) Listen(ctx context.Context) error {
-	s.prependHelpHandle()
 
-	go s.rtm.ManageConnection()
-	for {
-		select {
-		case <-ctx.Done():
-			s.rtm.Disconnect()
-			return ctx.Err()
-		case msg, ok := <-s.rtm.IncomingEvents:
-			if !ok {
-				return nil
-			}
-			switch event := msg.Data.(type) {
-			case *slack.ConnectedEvent:
-				if s.initHandler == nil {
-					continue
-				}
-				go s.initHandler()
+	go func() {
+		for evt := range s.RTM().Events {
+			switch evt.Type {
+			case socketmode.EventTypeConnecting:
+				fmt.Println("Connecting to Slack with Socket Mode...")
+			case socketmode.EventTypeConnectionError:
+				return ctx.Err()
+			case socketmode.EventTypeConnected:
+				fmt.Println("Connected to Slack with Socket Mode.")
+			case socketmode.EventTypeEventsAPI:
+				eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+				if !ok {
+					fmt.Printf("Ignored %+v\n", evt)
 
-			case *slack.MessageEvent:
-				if s.isFromBot(event) {
 					continue
 				}
 
-				if !s.isBotMentioned(event) && !s.isDirectMessage(event) {
+				fmt.Printf("Event received: %+v\n", eventsAPIEvent)
+
+				s.RTM().Ack(*evt.Request)
+
+				switch eventsAPIEvent.Type {
+				case slackevents.CallbackEvent:
+					innerEvent := eventsAPIEvent.InnerEvent
+					switch ev := innerEvent.Data.(type) {
+					case *slackevents.AppMentionEvent:
+						_, _, err := api.PostMessage(ev.Channel, slack.MsgOptionText("Yes, hello.", false))
+						if err != nil {
+							fmt.Printf("failed posting message: %v", err)
+						}
+					case *slackevents.MemberJoinedChannelEvent:
+						fmt.Printf("user %q joined to channel %q", ev.User, ev.Channel)
+					}
+				default:
+					s.RTM().Debugf("unsupported Events API event received")
+				}
+			case socketmode.EventTypeInteractive:
+				callback, ok := evt.Data.(slack.InteractionCallback)
+				if !ok {
+					fmt.Printf("Ignored %+v\n", evt)
+
 					continue
 				}
-				go s.handleMessage(ctx, event)
 
-			case *slack.RTMError:
-				if s.errorHandler == nil {
+				fmt.Printf("Interaction received: %+v\n", callback)
+
+				var payload interface{}
+
+				switch callback.Type {
+				case slack.InteractionTypeBlockActions:
+					// See https://api.slack.com/apis/connections/socket-implement#button
+
+					s.RTM().Debugf("button clicked!")
+				case slack.InteractionTypeShortcut:
+				case slack.InteractionTypeViewSubmission:
+					// See https://api.slack.com/apis/connections/socket-implement#modal
+				case slack.InteractionTypeDialogSubmission:
+				default:
+
+				}
+
+				s.RTM().Ack(*evt.Request, payload)
+			case socketmode.EventTypeSlashCommand:
+				cmd, ok := evt.Data.(slack.SlashCommand)
+				if !ok {
+					fmt.Printf("Ignored %+v\n", evt)
+
 					continue
 				}
-				go s.errorHandler(event.Error())
 
-			case *slack.InvalidAuthEvent:
-				return errors.New(invalidToken)
+				s.RTM().Debugf("Slash command received: %+v", cmd)
 
+				payload := map[string]interface{}{
+					"blocks": []slack.Block{
+						slack.NewSectionBlock(
+							&slack.TextBlockObject{
+								Type: slack.MarkdownType,
+								Text: "foo",
+							},
+							nil,
+							slack.NewAccessory(
+								slack.NewButtonBlockElement(
+									"",
+									"somevalue",
+									&slack.TextBlockObject{
+										Type: slack.PlainTextType,
+										Text: "bar",
+									},
+								),
+							),
+						),
+					}}
+
+				s.RTM().Ack(*evt.Request, payload)
 			default:
-				if s.defaultEventHandler == nil {
-					continue
-				}
-				go s.defaultEventHandler(event)
+				fmt.Fprintf(os.Stderr, "Unexpected event type received: %s\n", evt.Type)
 			}
 		}
-	}
+	}()
+
+	s.RTM().Run()
 }
 
 // GetUserInfo retrieve complete user information

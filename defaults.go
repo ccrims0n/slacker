@@ -15,11 +15,13 @@ func WithDebug(debug bool) ClientOption {
 // ClientDefaults configuration
 type ClientDefaults struct {
 	Debug bool
+	AppToken string
 }
 
 func newClientDefaults(options ...ClientOption) *ClientDefaults {
 	config := &ClientDefaults{
 		Debug: false,
+		AppToken: ""
 	}
 
 	for _, option := range options {

@@ -30,7 +30,7 @@ type response struct {
 func (r *response) ReportError(err error, options ...ReportErrorOption) {
 	defaults := newReportErrorDefaults(options...)
 
-	rtm := r.botCtx.RTM()
+	rtm := r.botCtx.Client()
 	event := r.botCtx.Event()
 	message := rtm.NewOutgoingMessage(fmt.Sprintf(errorFormat, err.Error()), event.Channel)
 	if defaults.ThreadResponse {
@@ -42,7 +42,7 @@ func (r *response) ReportError(err error, options ...ReportErrorOption) {
 
 // Typing send a typing indicator
 func (r *response) Typing() {
-	rtm := r.botCtx.RTM()
+	rtm := r.botCtx.Client()
 	event := r.botCtx.Event()
 	rtm.SendMessage(rtm.NewTypingMessage(event.Channel))
 }
@@ -51,7 +51,7 @@ func (r *response) Typing() {
 func (r *response) Reply(message string, options ...ReplyOption) error {
 	defaults := newReplyDefaults(options...)
 
-	rtm := r.botCtx.RTM()
+	rtm := r.botCtx.Client()
 	event := r.botCtx.Event()
 	if defaults.ThreadResponse {
 		_, _, err := rtm.PostMessage(
