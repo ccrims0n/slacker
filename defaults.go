@@ -21,7 +21,7 @@ type ClientDefaults struct {
 func newClientDefaults(options ...ClientOption) *ClientDefaults {
 	config := &ClientDefaults{
 		Debug: false,
-		AppToken: ""
+		AppToken: "",
 	}
 
 	for _, option := range options {
